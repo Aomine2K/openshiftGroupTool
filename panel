@@ -1,0 +1,89 @@
+#!/bin/bash
+
+GROUP_NAME="view-prod-ekontrole-poczta"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
+OUTPUT_FILE="view-prod-ekontrole-poczta-$(date '+%Y%m%d_%H%M').yaml"
+
+echo "=============================================="
+echo "Tworzenie grupy: $GROUP_NAME"
+echo "Data utworzenia: $TIMESTAMP"
+echo "=============================================="
+echo
+
+# Pobranie projektów spełniających warunek
+PROJECTS=$(oc get projects -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+    | grep -E '(-prod|ekontrole-poczta)')
+
+if [ -z "$PROJECTS" ]; then
+    echo "Nie znaleziono żadnych projektów."
+    exit 1
+fi
+
+echo "Projekty, do których grupa otrzyma VIEW:"
+echo "$PROJECTS"
+echo
+
+echo "Grupa: $GROUP_NAME"
+echo "Data:  $TIMESTAMP"
+echo
+
+read -p "Czy utworzyć YAML? [t/N]: " CONFIRM
+
+if [[ ! "$CONFIRM" =~ ^[TtYy]$ ]]; then
+    echo "Anulowano."
+    exit 0
+fi
+
+# ==============================================
+# GROUP
+# ==============================================
+
+cat > "$OUTPUT_FILE" <<EOF
+apiVersion: user.openshift.io/v1
+kind: Group
+metadata:
+  name: $GROUP_NAME
+  annotations:
+    created-at: "$TIMESTAMP"
+---
+EOF
+
+# ==============================================
+# ROLEBINDING DLA KAŻDEGO PROJEKTU
+# ==============================================
+
+while read -r PROJECT
+do
+
+cat >> "$OUTPUT_FILE" <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${GROUP_NAME}-view
+  namespace: $PROJECT
+  annotations:
+    created-at: "$TIMESTAMP"
+subjects:
+  - kind: Group
+    name: $GROUP_NAME
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io
+---
+EOF
+
+done <<< "$PROJECTS"
+
+echo
+echo "=============================================="
+echo "YAML został utworzony:"
+echo "$OUTPUT_FILE"
+echo "=============================================="
+echo
+echo "Sprawdź zawartość:"
+echo "cat $OUTPUT_FILE"
+echo
+echo "Aby wykonać zmianę:"
+echo "oc apply -f $OUTPUT_FILE"
