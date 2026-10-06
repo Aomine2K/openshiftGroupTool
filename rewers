@@ -1,0 +1,171 @@
+#!/bin/bash
+
+# ============================================================
+# KONFIGURACJA
+# ============================================================
+
+GROUP_NAME="ALL-PROD-20261005-1043"
+
+# Stara nazwa RoleBindingu
+OLD_ROLEBINDING="${GROUP_NAME}-view"
+
+# ============================================================
+# POBRANIE PROJEKTÓW
+# ============================================================
+
+PROJECTS=$(oc get projects -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+    | grep -E '(-prod|ekontrole-poczta)')
+
+if [ -z "$PROJECTS" ]; then
+    echo
+    echo "Nie znaleziono żadnych projektów."
+    exit 1
+fi
+
+# ============================================================
+# SPRAWDZENIE GRUPY
+# ============================================================
+
+echo
+echo "Sprawdzam grupę:"
+echo "  $GROUP_NAME"
+echo
+
+if ! oc get group "$GROUP_NAME" >/dev/null 2>&1
+then
+    echo "BŁĄD: Grupa $GROUP_NAME nie istnieje!"
+    echo "Przerywam działanie."
+    exit 1
+fi
+
+echo "Grupa istnieje."
+echo
+
+# ============================================================
+# PODGLĄD ZMIAN
+# ============================================================
+
+echo "============================================================"
+echo "PLANOWANE ZMIANY"
+echo "============================================================"
+echo
+
+while read -r PROJECT
+do
+    NEW_ROLEBINDING="${PROJECT}-view"
+
+    echo "Projekt:"
+    echo "  $PROJECT"
+
+    echo "  STARY:"
+    echo "    $OLD_ROLEBINDING"
+
+    echo "  NOWY:"
+    echo "    $NEW_ROLEBINDING"
+
+    echo
+done <<< "$PROJECTS"
+
+echo "============================================================"
+echo
+echo "UWAGA!"
+echo "Zostaną usunięte stare RoleBindingi:"
+echo "  $OLD_ROLEBINDING"
+echo
+echo "i utworzone nowe:"
+echo "  nazwaprojektu-view"
+echo
+echo "Grupa $GROUP_NAME NIE zostanie usunięta."
+echo
+
+read -p "Czy chcesz wykonać te zmiany? Wpisz TAK: " CONFIRM
+
+if [ "$CONFIRM" != "TAK" ]
+then
+    echo
+    echo "Anulowano. Nie wykonano żadnych zmian."
+    exit 0
+fi
+
+# ============================================================
+# WYKONANIE ZMIAN
+# ============================================================
+
+echo
+echo "Rozpoczynam wykonywanie zmian..."
+echo
+
+while read -r PROJECT
+do
+
+    OLD_RB="$OLD_ROLEBINDING"
+    NEW_RB="${PROJECT}-view"
+
+    echo "------------------------------------------------------------"
+    echo "Projekt: $PROJECT"
+    echo "------------------------------------------------------------"
+
+    # --------------------------------------------------------
+    # USUNIĘCIE STAREGO ROLEBINDINGU
+    # --------------------------------------------------------
+
+    if oc get rolebinding "$OLD_RB" -n "$PROJECT" >/dev/null 2>&1
+    then
+        echo "Usuwam: $OLD_RB"
+
+        oc delete rolebinding "$OLD_RB" -n "$PROJECT"
+
+        if [ $? -ne 0 ]
+        then
+            echo "BŁĄD podczas usuwania $OLD_RB"
+            echo "Pomijam tworzenie nowego RB w tym projekcie."
+            continue
+        fi
+    else
+        echo "Stary RoleBinding nie istnieje: $OLD_RB"
+    fi
+
+    # --------------------------------------------------------
+    # UTWORZENIE NOWEGO ROLEBINDINGU
+    # --------------------------------------------------------
+
+    if oc get rolebinding "$NEW_RB" -n "$PROJECT" >/dev/null 2>&1
+    then
+        echo "Nowy RoleBinding już istnieje: $NEW_RB"
+        echo "Pomijam tworzenie."
+    else
+
+        echo "Tworzę: $NEW_RB"
+
+        oc create rolebinding "$NEW_RB" \
+            --clusterrole=view \
+            --group="$GROUP_NAME" \
+            -n "$PROJECT"
+
+        if [ $? -ne 0 ]
+        then
+            echo "BŁĄD podczas tworzenia $NEW_RB"
+        else
+            echo "OK: $NEW_RB"
+        fi
+    fi
+
+    echo
+
+done <<< "$PROJECTS"
+
+# ============================================================
+# PODSUMOWANIE
+# ============================================================
+
+echo
+echo "============================================================"
+echo "ZAKOŃCZONO"
+echo "============================================================"
+echo
+echo "Grupa:"
+echo "  $GROUP_NAME"
+echo
+echo "RoleBindingi powinny mieć teraz format:"
+echo "  nazwaprojektu-view"
+echo
